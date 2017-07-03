@@ -21,12 +21,31 @@ module StatefulEnum
         @model.send :undef_method, "#{@prefix}#{state}#{@suffix}!"
       end
 
+      machine = self
+      @model.send(:define_singleton_method, :"#{column}_state_machine") do
+        machine
+      end
+
+      @model.send :define_method, :"invoke_#{column}_event!" do |event_name|
+        unless machine.event_names.map(&:to_s).include? event_name.to_s
+          raise "Undefined event: #{event_name}"
+        end
+
+        public_send :"#{event_name}!"
+      end
+
       instance_eval(&block) if block
+    end
+
+    attr_reader :event_names
+
+    def events
+      @events ||= []
     end
 
     def event(name, &block)
       raise ArgumentError, "event: :#{name} has already been defined." if @event_names.include? name
-      Event.new @model, @column, @states, @original_methods, @prefix, @suffix, name, &block
+      events << Event.new(@model, @column, @states, @original_methods, @prefix, @suffix, name, &block)
       @event_names << name
     end
 
@@ -45,8 +64,8 @@ module StatefulEnum
           detect_enum_conflict! column, new_method_name
           define_method new_method_name do
             to, condition = transitions[send(column).to_sym]
-            #TODO better error
-            if to && (!condition || instance_exec(&condition))
+            ##TODO better error
+            if to && (!condition || instance_exec(self, &condition))
               #TODO transaction?
               instance_eval(&before) if before
               original_method = original_methods[to]
@@ -83,7 +102,7 @@ module StatefulEnum
           options[:if] = transitions.delete :if
           #TODO should err if if & unless were specified together?
           if (unless_condition = transitions.delete :unless)
-            options[:if] = -> { !instance_exec(&unless_condition) }
+            options[:if] = -> { !instance_exec(self, &unless_condition) }
           end
         end
         transitions.each_pair do |from, to|
